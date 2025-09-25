@@ -10,9 +10,10 @@ import base64
 from dotenv import load_dotenv
 load_dotenv()
 
-# Configure Gemini
+# Configure AI Models
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-2.5-flash')
+image_gen_model = genai.GenerativeModel('imagen-4.0-generate-001')  # Main model for generation
+analysis_model = genai.GenerativeModel('gemini-2.5-flash')  # For image analysis only
 
 # Custom CSS for super appealing artistic photographic theme
 st.markdown("""
@@ -256,21 +257,57 @@ def save_image_from_response(response, filename=None):
                 if hasattr(candidate, 'content') and candidate.content:
                     for part in candidate.content.parts:
                         if hasattr(part, 'inline_data') and part.inline_data:
-                            image_data = BytesIO(part.inline_data.data)
-                            img = Image.open(image_data)
-                            return img
+                            try:
+                                # Handle base64 encoded data
+                                if hasattr(part.inline_data, 'data'):
+                                    image_data = part.inline_data.data
+                                    st.write(f"Debug: Data type: {type(image_data)}, Length: {len(image_data) if hasattr(image_data, '__len__') else 'N/A'}")
+                                    
+                                    if isinstance(image_data, str):
+                                        # Base64 string
+                                        image_data = base64.b64decode(image_data)
+                                        st.write(f"Debug: Decoded data length: {len(image_data)}")
+                                    
+                                    if len(image_data) < 100:
+                                        st.error(f"Debug: Data too small, content: {image_data[:50]}")
+                                        continue
+                                    
+                                    # Check if data starts with valid image headers
+                                    if not (image_data.startswith(b'\xff\xd8') or  # JPEG
+                                           image_data.startswith(b'\x89PNG') or   # PNG
+                                           image_data.startswith(b'GIF')):        # GIF
+                                        st.error(f"Debug: Invalid image format. First 20 bytes: {image_data[:20]}")
+                                        continue
+                                        
+                                    img = Image.open(BytesIO(image_data))
+                                    return img
+                            except Exception as e:
+                                st.error(f"Error decoding image data: {str(e)}")
+                                continue
                         elif hasattr(part, 'file_data') and part.file_data:
                             # Handle file data format
                             pass
         
-        # No image found - Gemini returned text only
-        st.warning("⚠️ Gemini 2.5 Flash returned text instead of an image. This model may not support image generation.")
-        if hasattr(response, 'text') and response.text:
-            st.info(f"Model response: {response.text}")
+        # Check if request was blocked/filtered
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'finish_reason') and candidate.finish_reason == 1:
+                st.error("🚫 Image generation was blocked. Try a different, more appropriate prompt.")
+                return None
+        
+        # No image found - check for text response
+        try:
+            if hasattr(response, 'text') and response.text:
+                st.info(f"Model response: {response.text}")
+        except:
+            st.warning("⚠️ No image was generated. The request may have been filtered or the model returned no content.")
         
         return None
     except Exception as e:
-        st.error(f"Error processing response: {str(e)}")
+        if "finish_reason is 1" in str(e):
+            st.error("🚫 Image generation was blocked. Try a different, more appropriate prompt.")
+        else:
+            st.error(f"Error processing response: {str(e)}")
         return None
 
 def process_image_edit(image, prompt, operation_type):
@@ -278,14 +315,14 @@ def process_image_edit(image, prompt, operation_type):
     try:
         # Generate content based on operation type
         if operation_type == "edit":
-            response = model.generate_content([prompt, image])
+            response = analysis_model.generate_content([prompt, image])
         elif operation_type == "fusion" and len(st.session_state.get('fusion_images', [])) > 1:
             img2 = st.session_state.fusion_images[1]
-            response = model.generate_content([prompt, image, img2])
+            response = analysis_model.generate_content([prompt, image, img2])
         elif operation_type == "restoration":
-            response = model.generate_content([prompt, image])
+            response = analysis_model.generate_content([prompt, image])
         elif operation_type == "generation":
-            response = model.generate_content(prompt)
+            response = image_gen_model.generate_content(prompt)
         else:
             return None
         
@@ -376,7 +413,7 @@ def main():
                     image = image.rotate(-rotation, expand=True)
                 
                 st.session_state.uploaded_image = image
-                st.image(image, caption="📷 Your Original Masterpiece", use_column_width=True, output_format="PNG")
+                st.image(image, caption="📷 Your Original Masterpiece", use_container_width=True, output_format="PNG")
         
         elif operation == "Image Fusion":
             uploaded_files = st.file_uploader(
@@ -400,7 +437,7 @@ def main():
                     )
                     if rot1 != 0:
                         images[0] = images[0].rotate(-rot1, expand=True)
-                    st.image(images[0], caption="🖼️ First Image", use_column_width=True)
+                    st.image(images[0], caption="🖼️ First Image", use_container_width=True)
                 
                 with col1_2:
                     rot2 = st.select_slider(
@@ -412,7 +449,7 @@ def main():
                     )
                     if rot2 != 0:
                         images[1] = images[1].rotate(-rot2, expand=True)
-                    st.image(images[1], caption="🖼️ Second Image", use_column_width=True)
+                    st.image(images[1], caption="🖼️ Second Image", use_container_width=True)
                 
                 st.session_state.fusion_images = images
         
@@ -481,7 +518,7 @@ def main():
             if result_rotation != 0:
                 display_image = st.session_state.result_image.rotate(-result_rotation, expand=True)
             
-            st.image(display_image, use_column_width=True, output_format="PNG", caption="✨ AI-Generated Masterpiece")
+            st.image(display_image, use_container_width=True, output_format="PNG", caption="✨ AI-Generated Masterpiece")
             
             # Download button
             buf = BytesIO()

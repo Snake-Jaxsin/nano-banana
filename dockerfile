@@ -8,15 +8,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (ultra-fast Python package manager)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:$PATH"
+RUN pip install uv
 
 # Copy requirements files
 COPY requirements.txt .
 
-# Install packages using both uv and pip as requested
-RUN uv pip install -r requirements.txt
-RUN pip install google-generativeai pillow python-dotenv streamlit-drawable-canvas
+# Install packages
+RUN pip install -r requirements.txt
 
 # Copy application code
 COPY . .
